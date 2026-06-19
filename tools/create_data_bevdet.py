@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import argparse
 import pickle
 
 import numpy as np
@@ -101,13 +102,11 @@ def nuscenes_data_prep(root_path, info_prefix, version, max_sweeps=10):
         root_path, info_prefix, version=version, max_sweeps=max_sweeps)
 
 
-def add_ann_adj_info(extra_tag):
-    nuscenes_version = 'v1.0-trainval'
-    dataroot = './data/nuscenes/'
-    nuscenes = NuScenes(nuscenes_version, dataroot)
+def add_ann_adj_info(extra_tag, version, root_path):
+    nuscenes = NuScenes(version, root_path)
     for set in ['train', 'val']:
         dataset = pickle.load(
-            open('./data/nuscenes/%s_infos_%s.pkl' % (extra_tag, set), 'rb'))
+            open(f'./data/nuscenes/{extra_tag}_infos_{set}.pkl', 'rb'))
         for id in range(len(dataset['infos'])):
             if id % 10 == 0:
                 print('%d/%d' % (id, len(dataset['infos'])))
@@ -128,28 +127,47 @@ def add_ann_adj_info(extra_tag):
 
             scene = nuscenes.get('scene', sample['scene_token'])
             dataset['infos'][id]['occ_path'] = \
-                './data/nuscenes/gts/%s/%s'%(scene['name'], info['token'])
-        with open('./data/nuscenes/%s_infos_%s.pkl' % (extra_tag, set),
-                  'wb') as fid:
+                f'./data/nuscenes/gts/{scene["name"]}/{info["token"]}'
+        with open(f'./data/nuscenes/{extra_tag}_infos_{set}.pkl', 'wb') as fid:
             pickle.dump(dataset, fid)
 
 
 if __name__ == '__main__':
-    dataset = 'nuscenes'
-    version = 'v1.0-trainval'
-    # version = 'v1.0-test'
-    root_path = './data/nuscenes'
-    extra_tag = 'bevdetv3-nuscenes'
+    parser = argparse.ArgumentParser(description='Data converter arg parser')
+    parser.add_argument(
+        '--version',
+        type=str,
+        default='v1.0-trainval',
+        choices=['v1.0-trainval', 'v1.0-test', 'v1.0-mini'],
+        help='nuScenes dataset version to process')
+    parser.add_argument(
+        '--root-path',
+        type=str,
+        default='./data/nuscenes',
+        help='specify the root path of dataset')
+    parser.add_argument(
+        '--extra-tag',
+        type=str,
+        default='bevdetv3-nuscenes',
+        help='specify the extra tag of info pkl files')
+    parser.add_argument(
+        '--max-sweeps',
+        type=int,
+        default=10,
+        help='number of input consecutive sweeps')
+    
+    args = parser.parse_args()
+    
     nuscenes_data_prep(
-        root_path=root_path,
-        info_prefix=extra_tag,
-        version=version,
-        max_sweeps=10)
+        root_path=args.root_path,
+        info_prefix=args.extra_tag,
+        version=args.version,
+        max_sweeps=args.max_sweeps)
 
     # print('add_ann_infos')
-    add_ann_adj_info(extra_tag)
+    add_ann_adj_info(args.extra_tag, args.version, args.root_path)
 
     create_groundtruth_database('NuScenesDataset',
-                                root_path,
-                                extra_tag,
-                                f'{root_path}/{extra_tag}_infos_train.pkl')
+                                args.root_path,
+                                args.extra_tag,
+                                f'{args.root_path}/{args.extra_tag}_infos_train.pkl')
