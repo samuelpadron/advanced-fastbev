@@ -119,7 +119,8 @@ exps/
 logs/
 *~
 mmdet3d/.mim
-
+work_dirs
+*.bak
 # Pytorch
 *.pth
 
