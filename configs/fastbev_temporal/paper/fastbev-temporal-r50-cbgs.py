@@ -107,7 +107,14 @@ model = dict(
             type='SeparateHead', init_bias=-2.19, final_kernel=3),
         loss_cls=dict(type='GaussianFocalLoss', reduction='mean'),
         loss_bbox=dict(type='L1Loss', reduction='mean', loss_weight=0.25),
-        norm_bbox=True),
+        norm_bbox=True,
+        loss_vel_plausibility=dict(
+            type='VelocityPlausibilityLoss',
+            class_max_vel={
+                0: 20.0, 1: 15.0, 2: 10.0, 3: 25.0, 4: 15.0,
+                5: 5.0, 6: 15.0, 7: 8.0, 8: 4.0, 9: 2.0,
+            },
+            loss_weight=1.0)),
     train_cfg=dict(
         pts=dict(
             point_cloud_range=point_cloud_range,
@@ -222,7 +229,7 @@ test_data_config = dict(
     ann_file=data_root + 'bevdetv3-nuscenes_infos_val.pkl')
 
 data = dict(
-    samples_per_gpu=4,          # halved from 8 since we now encode each frame separately
+    samples_per_gpu=8,
     workers_per_gpu=4,
     train=dict(
         type='CBGSDataset',
@@ -242,7 +249,7 @@ for key in ['val', 'test']:
 data['train']['dataset'].update(share_data_config)
 
 # Optimizer
-optimizer = dict(type='AdamW', lr=2e-4, weight_decay=1e-2)
+optimizer = dict(type='AdamW', lr=4e-4, weight_decay=1e-2)
 optimizer_config = dict(grad_clip=dict(max_norm=5, norm_type=2))
 lr_config = dict(
     policy='step',
@@ -251,6 +258,14 @@ lr_config = dict(
     warmup_ratio=0.001,
     step=[20,])
 runner = dict(type='EpochBasedRunner', max_epochs=20)
+
+# Precision
+fp16 = dict(loss_scale='dynamic')
+
+# Checkpoint
+checkpoint_config = dict(
+    interval=1,
+)
 
 custom_hooks = [
     dict(

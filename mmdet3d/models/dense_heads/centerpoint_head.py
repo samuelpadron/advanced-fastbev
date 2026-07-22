@@ -281,6 +281,7 @@ class CenterHead(BaseModule):
                  loss_cls=dict(type='GaussianFocalLoss', reduction='mean'),
                  loss_bbox=dict(
                      type='L1Loss', reduction='none', loss_weight=0.25),
+                 loss_vel_plausibility=None,
                  separate_head=dict(
                      type='SeparateHead', init_bias=-2.19, final_kernel=3),
                  share_conv_channel=64,
@@ -305,6 +306,7 @@ class CenterHead(BaseModule):
 
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
+        self.loss_vel_plausibility = (build_loss(loss_vel_plausibility) if loss_vel_plausibility is not None else None)
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.num_anchor_per_locs = [n for n in num_classes]
         self.fp16_enabled = False
@@ -418,7 +420,7 @@ class CenterHead(BaseModule):
                     - list[torch.Tensor]: Masks indicating which
                         boxes are valid.
         """
-        heatmaps, anno_boxes, inds, masks = multi_apply(
+        heatmaps, anno_boxes, inds, masks, cls_id_targets = multi_apply(
             self.get_targets_single, gt_bboxes_3d, gt_labels_3d)
         # Transpose heatmaps
         heatmaps = list(map(list, zip(*heatmaps)))
@@ -429,10 +431,14 @@ class CenterHead(BaseModule):
         # Transpose inds
         inds = list(map(list, zip(*inds)))
         inds = [torch.stack(inds_) for inds_ in inds]
-        # Transpose inds
+        # Transpose masks
         masks = list(map(list, zip(*masks)))
         masks = [torch.stack(masks_) for masks_ in masks]
-        return heatmaps, anno_boxes, inds, masks
+        # Transpose cls id targets
+        cls_id_targets = list(map(list, zip(*cls_id_targets)))
+        cls_id_targets = [torch.stack(c_) for c_ in cls_id_targets]
+        
+        return heatmaps, anno_boxes, inds, masks, cls_id_targets
 
     def get_targets_single(self, gt_bboxes_3d, gt_labels_3d):
         """Generate training targets for a single sample.
@@ -487,7 +493,7 @@ class CenterHead(BaseModule):
             task_classes.append(torch.cat(task_class).long().to(device))
             flag2 += len(mask)
         draw_gaussian = draw_heatmap_gaussian
-        heatmaps, anno_boxes, inds, masks = [], [], [], []
+        heatmaps, anno_boxes, inds, masks, cls_id_targets = [], [], [], [], []
 
         for idx, task_head in enumerate(self.task_heads):
             heatmap = gt_bboxes_3d.new_zeros(
@@ -503,6 +509,7 @@ class CenterHead(BaseModule):
 
             ind = gt_labels_3d.new_zeros((max_objs), dtype=torch.int64)
             mask = gt_bboxes_3d.new_zeros((max_objs), dtype=torch.uint8)
+            cls_id_target = gt_labels_3d.new_full((max_objs,), -1, dtype=torch.int64)
 
             num_objs = min(task_boxes[idx].shape[0], max_objs)
 
@@ -555,6 +562,7 @@ class CenterHead(BaseModule):
 
                     ind[new_idx] = y * feature_map_size[0] + x
                     mask[new_idx] = 1
+                    cls_id_target[new_idx] = cls_id
                     # TODO: support other outdoor dataset
                     rot = task_boxes[idx][k][6]
                     box_dim = task_boxes[idx][k][3:6]
@@ -582,7 +590,8 @@ class CenterHead(BaseModule):
             anno_boxes.append(anno_box)
             masks.append(mask)
             inds.append(ind)
-        return heatmaps, anno_boxes, inds, masks
+            cls_id_targets.append(cls_id_target)
+        return heatmaps, anno_boxes, inds, masks, cls_id_targets
 
     def loss(self, gt_bboxes_3d, gt_labels_3d, preds_dicts, **kwargs):
         """Loss function for CenterHead.
@@ -596,7 +605,7 @@ class CenterHead(BaseModule):
         Returns:
             dict[str:torch.Tensor]: Loss of heatmap and bbox of each task.
         """
-        heatmaps, anno_boxes, inds, masks = self.get_targets(
+        heatmaps, anno_boxes, inds, masks, cls_id_targets = self.get_targets(
             gt_bboxes_3d, gt_labels_3d)
         loss_dict = dict()
         if not self.task_specific:
@@ -664,6 +673,13 @@ class CenterHead(BaseModule):
                     pred, target_box, bbox_weights, avg_factor=num)
                 loss_dict['loss'] += loss_bbox
                 loss_dict['loss'] += loss_heatmap
+                
+            if self.with_velocity and self.loss_vel_plausibility is not None:
+                valid = masks[task_id].bool()
+                if valid.any():
+                    pred_vel = pred[..., 8:10][valid]
+                    target_cls = cls_id_targets[task_id][valid]
+                    loss_dict[f'task{task_id}.loss_vel_plausibility'] = self.loss_vel_plausibility(pred_vel, target_cls)
 
         return loss_dict
 

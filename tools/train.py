@@ -29,6 +29,19 @@ try:
 except ImportError:
     from mmdet3d.utils import setup_multi_processes
 
+# Compatibility shim: this codebase predates numpy 1.20's deprecation of
+# np.bool/np.int/np.float/etc as aliases for Python builtins. numpy 1.24
+# removed them entirely. Restoring them as plain aliases changes no
+# behavior (they were never separate types) and avoids patching every
+# call site across the codebase individually.
+import numpy as np
+_np_deprecated_aliases = {
+    'bool': bool, 'int': int, 'float': float,
+    'object': object, 'str': str, 'long': int, 'complex': complex,
+}
+for _alias, _builtin in _np_deprecated_aliases.items():
+    if not hasattr(np, _alias):
+        setattr(np, _alias, _builtin)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a detector')
