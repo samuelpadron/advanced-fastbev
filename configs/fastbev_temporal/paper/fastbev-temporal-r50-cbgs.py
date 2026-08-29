@@ -1,6 +1,5 @@
-# FastBEVTemporalConcat: FastBEV + post-encoder temporal fusion
-# Identity-initialized fusion module, loaded from FastBEV r50-cbgs single-frame baseline.
-# Expected baseline NDS at init (before any temporal training): ~0.384
+# Copyright (c) Phigent Robotics. All rights reserved.
+
 
 _base_ = ['../../_base_/datasets/nus-3d.py', '../../_base_/default_runtime.py']
 
@@ -33,16 +32,14 @@ grid_config = {
 }
 
 voxel_size = [0.1, 0.1, 0.2]
-numC_Trans = 64
-multi_adj_frame_id_cfg = (1, 1+1, 1)
+numC_Trans = 80
+multi_adj_frame_id_cfg = (1, 1 + 1, 1)
 
 model = dict(
-    type='FastBEVTemporalConcat',
+    type='FastBEV4D',
     use_depth=False,
     align_after_view_transfromation=False,
     num_adj=len(range(*multi_adj_frame_id_cfg)),
-    feat_channels=256,
-    fusion_dropout=0.3,
     img_backbone=dict(
         pretrained='data/ckpts/resnet50-19c8e357.pth',
         type='ResNet',
@@ -73,23 +70,29 @@ model = dict(
         fuse=dict(type='sum')),
     img_bev_encoder_backbone=dict(
         type='CustomResNet',
-        numC_input=numC_Trans,       # single-frame width, we encode each frame separately
+        numC_input=numC_Trans * (len(range(*multi_adj_frame_id_cfg)) + 1),
         num_channels=[numC_Trans * 2, numC_Trans * 4, numC_Trans * 8]),
     img_bev_encoder_neck=dict(
         type='FPN_LSS',
         in_channels=numC_Trans * 8 + numC_Trans * 2,
         out_channels=256),
-    # no pre_process: that was for raw-concat-then-encode, not needed here
+    pre_process=dict(
+        type='CustomResNet',
+        numC_input=numC_Trans,
+        num_layer=[2, ],
+        num_channels=[numC_Trans, ],
+        stride=[1, ],
+        backbone_output_ids=[0, ]),
     pts_bbox_head=dict(
         type='CenterHead',
         in_channels=256,
         tasks=[
             dict(num_class=10, class_names=['car', 'truck',
-                                            'construction_vehicle',
-                                            'bus', 'trailer',
-                                            'barrier',
-                                            'motorcycle', 'bicycle',
-                                            'pedestrian', 'traffic_cone']),
+                                             'construction_vehicle',
+                                             'bus', 'trailer',
+                                             'barrier',
+                                             'motorcycle', 'bicycle',
+                                             'pedestrian', 'traffic_cone']),
         ],
         common_heads=dict(
             reg=(2, 2), height=(1, 2), dim=(3, 2), rot=(2, 2), vel=(2, 2)),
@@ -108,6 +111,7 @@ model = dict(
         loss_cls=dict(type='GaussianFocalLoss', reduction='mean'),
         loss_bbox=dict(type='L1Loss', reduction='mean', loss_weight=0.25),
         norm_bbox=True,
+        # --- added for the ablation ---
         loss_vel_plausibility=dict(
             type='VelocityPlausibilityLoss',
             class_max_vel={
@@ -162,7 +166,7 @@ train_pipeline = [
         type='PrepareImageInputs',
         is_train=True,
         data_config=data_config,
-        sequential=True),           # multi-frame loading
+        sequential=True),
     dict(type='LoadAnnotations'),
     dict(
         type='BEVAug',
@@ -178,8 +182,9 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['img_inputs', 'gt_bboxes_3d', 'gt_labels_3d',
-                                  'gt_depth'])
+    dict(
+        type='Collect3D', keys=['img_inputs', 'gt_bboxes_3d', 'gt_labels_3d',
+                                 'gt_depth'])
 ]
 
 test_pipeline = [
@@ -220,7 +225,7 @@ share_data_config = dict(
     type=dataset_type,
     classes=class_names,
     modality=input_modality,
-    img_info_prototype='bevdet4d',              # required for multi-frame loading
+    img_info_prototype='bevdet4d',
     multi_adj_frame_id_cfg=multi_adj_frame_id_cfg,
 )
 
@@ -247,25 +252,15 @@ data = dict(
 for key in ['val', 'test']:
     data[key].update(share_data_config)
 data['train']['dataset'].update(share_data_config)
-
-# Optimizer
-optimizer = dict(type='AdamW', lr=4e-4, weight_decay=1e-2)
+optimizer = dict(type='AdamW', lr=2e-4, weight_decay=1e-2)
 optimizer_config = dict(grad_clip=dict(max_norm=5, norm_type=2))
 lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=200,
     warmup_ratio=0.001,
-    step=[20,])
+    step=[20, ])
 runner = dict(type='EpochBasedRunner', max_epochs=20)
-
-# Precision
-fp16 = dict(loss_scale='dynamic')
-
-# Checkpoint
-checkpoint_config = dict(
-    interval=1,
-)
 
 custom_hooks = [
     dict(
@@ -279,7 +274,5 @@ custom_hooks = [
     ),
 ]
 
-# Load backbone/neck/head weights from validated baseline.
-# temporal_fusion.* weights are new and will be randomly init'd
-# (then overwritten by identity init in BEVTemporalFusionConcat.__init__).
-load_from = '/home/spadronalcala/Documents/vector-space/models/fastbev-r50-cbgs/epoch_20_ema.pth'
+# load_from = '/home/spadronalcala/Documents/vector-space/models/fastbev-r50-cbgs/epoch_20_ema.pth'
+load_from = '/home/spadronalcala/Documents/advanced-fastbev/work_dirs/models/fastbev-r50-cbgs-4d/epoch_20_ema.pth'
